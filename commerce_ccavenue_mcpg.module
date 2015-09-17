@@ -1,0 +1,381 @@
+
+<?php
+/**
+ * @file
+ * CCavenue MCPG module for Drupal Commerce
+ */
+
+/**
+ * Administration forms form payment method.
+ */
+function ccavenue_mcpg_settings_form($settings = NULL) {
+  $form = array();
+  $settings = (array) $settings + array(
+    'merchant_id' => '',
+    'access_code' => '',
+    'encryption_key' => '',
+  );
+  $form['merchant_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Merchant id'),
+    '#default_value' => $settings['merchant_id'],
+  );
+  $form['access_code'] = array(
+    '#type' => 'textfield',
+    '#title' => t('CCAvenue MCPG Access Code'),
+    '#default_value' => $settings['access_code'],
+  );
+  $form['encryption_key'] = array(
+    '#type' => 'textfield',
+    '#title' => t('CCAvenue MCPG Encryption key'),
+    '#default_value' => $settings['encryption_key'],
+  );
+  return $form;
+}
+
+/**
+ * Register payment mehtod.
+ */
+function commerce_ccavenue_mcpg_commerce_payment_method_info() {
+  $payment_methods = array();
+  $ccavenue_mcpg_image="<img src='http://www.ccavenue.com/images/460.gif' border='0' id='ccavenue-img' style='display: block;'>";
+  $payment_methods['ccavenue_mcpg'] = array(
+    'title'          		=> t("CCAvenue MCPG"),
+    //'display_title'  		=> "CCAvenue MCPG",
+    'display_title'  		=> "CCAvenue MCPG"."   ".$ccavenue_mcpg_image,
+    'short_title'			=> 'CCAvenue MCPG',
+    'description'			=> t("Payment method for CCAvenue MCPG"),
+    'terminal' 		 		=> FALSE,
+    'offsite' 		 		=> TRUE,
+    'offsite_autoredirect'  => TRUE,
+  );
+  return $payment_methods;
+}
+
+/**
+ * Ask for CCAvenue MCPG redirect form.
+ */
+function ccavenue_mcpg_redirect_form($form, &$form_state, $order, $payment_method) {
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+  $billing_address = $wrapper->commerce_customer_billing->commerce_customer_address->value();
+  //$shipping_address = $wrapper->commerce_customer_shipping->commerce_customer_address->value();	
+  // Get financial info.
+  //initializing all variables
+  $merchant_id  	= '';
+  $order_id     	= '';
+  $amount			= '';
+  $currency			= '';
+  $access_code		= '';
+  $encryption_key	= '';
+  $billing_name		= '';
+  $redirect_url		= '';
+  $cancel_url		= '';
+  $language			= '';
+  $billing_city		= '';
+  $billing_state	= '';
+  $billing_zip		= '';
+  $billing_country	= '';
+  $billing_email	= '';
+  $delivery_name	= '';
+  $delivery_address	= '';
+  $delivery_city	= '';
+  $delivery_state	= '';
+  $delivery_zip		= '';
+  $delivery_country	= '';
+  
+  include_once DRUPAL_ROOT . '/includes/iso.inc';
+  $countries            = _country_get_predefined_list();
+  $merchant_id			= $payment_method['settings']['merchant_id'];
+  $order_id				= $order->order_id;
+  $amount				= $wrapper->commerce_order_total->amount->value() / 100;
+  $currency 			= $wrapper->commerce_order_total->currency_code->value();
+  $access_code			= $payment_method['settings']['access_code'];
+  $encryption_key		= $payment_method['settings']['encryption_key'];
+  $billing_name			= $billing_address['first_name']." ".$billing_address['last_name'];
+  $redirect_url			= url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE));
+  $cancel_url			= url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE));
+  $language				= 'EN';
+  $billing_thoroughfare = $billing_address['thoroughfare'];
+  $billing_city			= $billing_address['locality'];
+  $billing_state		= $billing_address['administrative_area'];
+  $billing_zip			= $billing_address['postal_code'];
+  $billing_country		= $countries[$billing_address['country']];
+  $billing_email		= $order->mail;
+
+
+  $order_data = array(
+    'merchant_id' 			=> $merchant_id,
+    'order_id' 				=> $order_id ,
+	'currency' 				=> $currency,
+	'amount' 				=> $amount,
+    'redirect_url' 			=> $redirect_url ,
+    'cancel_url' 			=> $cancel_url ,
+    'language' 				=> $language,
+	'billing_name'			=> $billing_name,
+	'billing_address'		=> $billing_thoroughfare,
+	'billing_city'			=> $billing_city,
+	'billing_state'			=> $billing_state,
+	'billing_zip'			=> $billing_zip,
+	'billing_country'		=> $billing_country,
+	'billing_tel'			=> '',
+	'billing_email'			=> $billing_email,
+	'merchant_param1'		=> $order_id
+	);
+	
+	$ccavenue_mcpg_data = '';
+	$ccavenue_mcpg_data_array =array();
+	foreach ($order_data as $key => $value)
+	{
+		$ccavenue_mcpg_data_array[] .=$key.'='.urlencode($value);
+	}
+	
+	$ccavenue_mcpg_data = implode("&",$ccavenue_mcpg_data_array);
+	$encrypted_data=encrypt($ccavenue_mcpg_data,$encryption_key);
+	
+	$form['encRequest'] = array(
+		'#type' => 'hidden',
+		'#value' => $encrypted_data,
+	);
+	$form['access_code'] = array(
+		'#type' => 'hidden',
+		'#value' => $access_code,
+	);
+
+	$form['#action'] = 'https://secure.ccavenue.com/transaction/transaction.do?command=initiateTransaction';
+	$form['#name'] ="redirect";
+	$form['#method'] ="post";
+	  
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to CCAvenue MCPG'),
+  );
+
+  return $form;
+	
+}
+ 
+function ccavenue_mcpg_redirect_form_validate($order, $payment_method) {
+    $order_status		= '';
+	$Order_Id    		= '';
+	$tracking_id		= '';
+	$bank_ref_no 		= '';
+	$failure_message 	= '';
+	$payment_mode 		= '';
+	$card_name    		= '';
+	$status_code  		= '';
+	$status_message 	= '';
+	$currency       	= '';
+	$amount				= '';
+	$encryption_key		= $payment_method['settings']['encryption_key']; 
+	$encResponse		= $_REQUEST['encResp'];	
+	$rcvdString			= decrypt($encResponse,$encryption_key);
+	$decryptValues		= explode('&', $rcvdString);
+	$dataSize			= sizeof($decryptValues);
+	$response_array		= array();
+	
+	for($i = 0; $i < count($decryptValues); $i++) 
+	{
+		$information	= explode('=',$decryptValues[$i]);
+		if(count($information)==2)
+		{
+			$response_array[$information[0]] = urldecode($information[1]);
+		}
+		  
+	}
+	
+	if(isset($response_array['order_id'])) $Order_Id 				= $response_array['order_id'];
+	if(isset($response_array['tracking_id'])) $tracking_id 			= $response_array['tracking_id'];
+	if(isset($response_array['bank_ref_no'])) $bank_ref_no 			= $response_array['bank_ref_no'];
+	if(isset($response_array['order_status'])) $order_status 		= $response_array['order_status'];
+	if(isset($response_array['failure_message'])) $failure_message  = $response_array['failure_message'];
+	if(isset($response_array['payment_mode'])) $payment_mode 		= $response_array['payment_mode'];
+	if(isset($response_array['card_name'])) $card_name 				= $response_array['card_name'];
+	if(isset($response_array['status_code'])) $status_code 			= $response_array['status_code'];
+	if(isset($response_array['status_message'])) $status_message 	= $response_array['status_message'];
+	if(isset($response_array['currency'])) $currency 				= $response_array['currency'];
+	if(isset($response_array['amount'])) $amount 					= $response_array['amount'];
+	
+  $message = t('Security error ip Address was: @ip', array('@ip' => ip_address()));
+  $ccavenue_mcpg_response=$response_array;
+  commerce_ccavenue_mcpg_transaction($order, $payment_method, $ccavenue_mcpg_response);
+ 
+  if($order_status=="Success") {
+   	commerce_payment_redirect_pane_next_page($order);
+    watchdog('commerce_ccavenue_mcpg', ' processed for Order @order_number with ID @tracking_id.', array('@tracking_id' => $response_array['tracking_id'], '@order_number' => $order->order_number), WATCHDOG_INFO);
+	return drupal_set_message(t('Thank you for shopping with us. Your credit card has been charged and your transaction is successful. We will be shipping your order to you soon.'));
+    //return drupal_set_message(t('Thank you for shopping with us. Your account has been charged and your transaction is successful.'));
+    // Here you need to put in the routines for a successful.
+    // Transaction such as sending an email to customer.
+    // Setting database status, informing logistics etc etc.
+  }
+  else if($order_status=="Aborted") {
+	return drupal_set_message(t('CCAvenue MCPG payment order cancelled and the transaction has been Aborted.'), 'warning');
+    //return drupal_set_message(('CCAvenue MCPG payment order cancelled and the transaction has been Aborted.'));
+	//return drupal_set_message(('Thank you for shopping with us.We will keep you posted regarding the status of your order through e-mail'));
+    // This is for payment American Express Card payment only.
+    // American Express authorisation status is available only after 5-6.
+  }
+  else if($order_status=="Failure") {
+	return drupal_set_message(t('CCAvenue MCPG payment order cancelled and the transaction has been Declined.'), 'error');
+    //return drupal_set_message(t('CCAvenue MCPG payment order cancelled and the transaction has been Declined.'));
+    //return drupal_set_message(t('Thank you for shopping with us.However,the transaction has been declined.'));
+    // Here you need to put in the routines for a failed.
+    // Transaction such as sending an email to customer.
+    // Setting database status etc etc.
+  }
+  else {
+    watchdog('commerce_ccavenue_mcpg', $message, NULL, WATCHDOG_ERROR);
+    return drupal_set_message(t('Security Error. Illegal access detected.'), 'error');
+  }
+  
+}
+/**
+ * CCAvenue MCPG finish payment
+ */
+function commerce_ccavenue_mcpg_transaction($order, $payment_method, &$ccavenue_mcpg_response) {
+  // Ask results from verify function.
+  $order_id      	= $order->order_id;
+  $wrapper  	 	= entity_metadata_wrapper('commerce_order', $order);
+  $order_currency 	= $wrapper->commerce_order_total->currency_code->value();
+  $default_currency = commerce_default_currency();
+  $currency_code 	= array('USD','INR','SGD','GBP','EUR');
+  $amount			= $wrapper->commerce_order_total->amount->value();
+  if(in_array($default_currency,$currency_code)){
+	$currency_code=$default_currency;
+  }
+  else{
+	$currency_code='INR';
+  }
+  
+  $amount= commerce_ccavenue_mcpg_price_amount(commerce_currency_convert($amount, $order_currency, $currency_code), $currency_code);
+
+  // Succeessful.
+ if(isset($ccavenue_mcpg_response['order_id'])) $ccavenue_mcpg_order_Id 				  = $ccavenue_mcpg_response['order_id'];
+ if(isset($ccavenue_mcpg_response['tracking_id'])) $ccavenue_mcpg_tracking_id 		  = $ccavenue_mcpg_response['tracking_id'];
+ if(isset($ccavenue_mcpg_response['bank_ref_no'])) $ccavenue_mcpg_bank_ref_no 		  = $ccavenue_mcpg_response['bank_ref_no'];
+ if(isset($ccavenue_mcpg_response['order_status'])) $ccavenue_mcpg_order_status 		  = $ccavenue_mcpg_response['order_status'];
+ if(isset($ccavenue_mcpg_response['failure_message'])) $ccavenue_mcpg_failure_message  = $ccavenue_mcpg_response['failure_message'];
+ if(isset($ccavenue_mcpg_response['payment_mode'])) $ccavenue_mcpg_payment_mode 		  = $ccavenue_mcpg_response['payment_mode'];
+ if(isset($ccavenue_mcpg_response['card_name'])) $ccavenue_mcpg_card_name 			  = $ccavenue_mcpg_response['card_name'];
+ if(isset($ccavenue_mcpg_response['status_code'])) $ccavenue_mcpg_status_code 		  = $ccavenue_mcpg_response['status_code'];
+ if(isset($ccavenue_mcpg_response['status_message'])) $ccavenue_mcpg_status_message 	  = $ccavenue_mcpg_response['status_message'];
+ if(isset($ccavenue_mcpg_response['currency'])) $ccavenue_mcpg_currency 				  = $ccavenue_mcpg_response['currency'];
+ if(isset($ccavenue_mcpg_response['amount'])) $ccavenue_mcpg_amount 					  = $ccavenue_mcpg_response['amount'];
+ $order_status = $ccavenue_mcpg_order_status;
+ // Exit when we don't get a payment status we recognize.
+ if(($ccavenue_mcpg_order_Id!=$order_id)||($ccavenue_mcpg_currency!=$order_currency)||($ccavenue_mcpg_amount!=$amount))
+ {
+ 	commerce_payment_redirect_pane_previous_page($order);
+ 	return FALSE;
+ }
+  
+  $transaction = commerce_payment_transaction_new('ccavenue_mcpg_payment', $order->order_id);
+  $transaction->instance_id = $payment_method['instance_id'];//'ccavenue|commerce_payment_ccavenue';//'ccavenue';
+  $transaction->amount = $ccavenue_mcpg_amount*100;
+  $transaction->currency_code = $ccavenue_mcpg_currency;
+  $transaction->remote_status = $ccavenue_mcpg_status_code;
+  $transaction->remote_id = $ccavenue_mcpg_tracking_id;
+
+   if($order_status == "Success") {
+		//$transaction->remote_status = t('Success');
+		commerce_order_status_update($order, 'completed');
+		$transaction->message 		= t('Payment received at') . ' ' . date("d-m-Y H:i:s", REQUEST_TIME);
+		$transaction->status 		= COMMERCE_PAYMENT_STATUS_SUCCESS;
+	}  
+	elseif($order_status == "Aborted"){
+		// Batch process - Pending orders.
+		//$transaction->remote_status = t('Pending');
+		commerce_order_status_update($order, 'pending');
+		$transaction->message		= t('Payment pending at') . ' ' . date("d-m-Y H:i:s", REQUEST_TIME);
+		$transaction->status 		= COMMERCE_PAYMENT_STATUS_PENDING;
+	}
+	elseif($order_status == "Failure"){
+		// Failed transaction.
+		//$transaction->remote_status = t('Failure');
+		commerce_order_status_update($order, 'canceled');
+		$transaction->message = t('Payment failed at') . ' ' . date("d-m-Y H:i:s", REQUEST_TIME);
+		$transaction->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+	}
+	else{
+		commerce_order_status_update($order, 'canceled');
+	}
+	
+	
+  commerce_payment_transaction_save($transaction);
+  return $transaction; 
+}
+
+/* Encrypt and Decrypt functions*/
+	function encrypt($plainText,$key)
+	{
+		$secretKey  = hextobin(md5($key));
+		$initVector = pack("C*", 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f);
+		$openMode   = mcrypt_module_open(MCRYPT_RIJNDAEL_128, '','cbc', '');
+		$blockSize  = mcrypt_get_block_size(MCRYPT_RIJNDAEL_128, 'cbc');
+		$plainPad   = pkcs5_pad($plainText, $blockSize);
+		if (mcrypt_generic_init($openMode, $secretKey, $initVector) != -1) 
+		{
+			  $encryptedText = mcrypt_generic($openMode, $plainPad);
+			  mcrypt_generic_deinit($openMode);
+						
+		} 
+		return bin2hex($encryptedText);
+	}
+
+	function decrypt($encryptedText,$key)
+	{
+		$secretKey = hextobin(md5($key));
+		$initVector = pack("C*", 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f);
+		$encryptedText=hextobin($encryptedText);
+		$openMode = mcrypt_module_open(MCRYPT_RIJNDAEL_128, '','cbc', '');
+		mcrypt_generic_init($openMode, $secretKey, $initVector);
+		$decryptedText = mdecrypt_generic($openMode, $encryptedText);
+		$decryptedText = rtrim($decryptedText, "\0");
+		mcrypt_generic_deinit($openMode);
+		return $decryptedText;
+		
+	}
+	
+//*********** Padding Function *********************
+	function pkcs5_pad ($plainText, $blockSize)
+	{
+		$pad = $blockSize - (strlen($plainText) % $blockSize);
+		return $plainText . str_repeat(chr($pad), $pad);
+	}
+
+	//********** Hexadecimal to Binary function for php 4.0 version ********
+
+	function hextobin($hexString) 
+	 { 
+			$length = strlen($hexString); 
+			$binString="";   
+			$count=0; 
+			while($count<$length) 
+			{       
+				$subString =substr($hexString,$count,2);           
+				$packedString = pack("H*",$subString); 
+				if ($count==0)
+			{
+				$binString=$packedString;
+			} 
+				
+			else 
+			{
+				$binString.=$packedString;
+			} 
+				
+			$count+=2; 
+			} 
+			return $binString; 
+	}
+	
+function commerce_ccavenue_mcpg_price_amount($amount, $currency_code) {
+  $rounded_amount = commerce_currency_round($amount, commerce_currency_load($currency_code));
+  return number_format(commerce_currency_amount_to_decimal($rounded_amount, $currency_code), 2, '.', '');
+}	
+
+//function commerce_ccavenue_mcpg_currencies($method_id) {
+	//return drupal_map_assoc(array('INR', 'USD'));
+//}	
+
